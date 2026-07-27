@@ -260,19 +260,28 @@ async function scrapeWithBrowser(url: string): Promise<string> {
       '--no-sandbox',
       '--disable-setuid-sandbox',
       '--disable-dev-shm-usage',
+      '--disable-accelerated-2d-canvas',
+      '--no-first-run',
+      '--no-zygote',
+      '--disable-gpu',
       '--disable-blink-features=AutomationControlled',
       '--disable-infobars',
       '--disable-crash-reporter',
       '--window-size=1920,1080',
-      '--start-maximized',
     ],
     executablePath,
     ignoreDefaultArgs: ['--enable-automation'],
   });
 
-
   try {
     const page = await browser.newPage();
+
+    // Set mobile user agent for Shopee / Lazada / TikTok if applicable
+    if (/shopee\.vn|lazada\.vn|tiktok\.com/i.test(url)) {
+      await page.setUserAgent(
+        'Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/20G75'
+      );
+    }
 
     // Set viewport
     await page.setViewport({ width: 1920, height: 1080 });
