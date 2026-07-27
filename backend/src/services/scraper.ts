@@ -250,7 +250,7 @@ function extractGenericCssCandidates($: CheerioAPI): PriceCandidate[] {
 async function scrapeWithBrowser(url: string): Promise<string> {
   // Ensure Puppeteer looks in local project cache if PUPPETEER_CACHE_DIR not explicitly set
   if (!process.env.PUPPETEER_CACHE_DIR) {
-    const localCache = path.join(process.cwd(), '.cache', 'puppeteer');
+    const localCache = path.resolve(process.cwd(), '.cache', 'puppeteer');
     if (fs.existsSync(localCache)) {
       process.env.PUPPETEER_CACHE_DIR = localCache;
     }
