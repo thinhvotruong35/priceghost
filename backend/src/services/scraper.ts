@@ -1,3 +1,4 @@
+import path from 'path';
 import fs from 'fs';
 import axios, { AxiosError } from 'axios';
 import { load, type CheerioAPI } from 'cheerio';
@@ -247,6 +248,14 @@ function extractGenericCssCandidates($: CheerioAPI): PriceCandidate[] {
 
 // Browser-based scraping for sites that block HTTP requests (e.g., Cloudflare)
 async function scrapeWithBrowser(url: string): Promise<string> {
+  // Ensure Puppeteer looks in local project cache if PUPPETEER_CACHE_DIR not explicitly set
+  if (!process.env.PUPPETEER_CACHE_DIR) {
+    const localCache = path.join(process.cwd(), '.cache', 'puppeteer');
+    if (fs.existsSync(localCache)) {
+      process.env.PUPPETEER_CACHE_DIR = localCache;
+    }
+  }
+
   // Check if custom executablePath actually exists on system before using it
   const envPath = process.env.PUPPETEER_EXECUTABLE_PATH;
   let executablePath: string | undefined = undefined;
