@@ -1,3 +1,4 @@
+import fs from 'fs';
 import axios, { AxiosError } from 'axios';
 import { load, type CheerioAPI } from 'cheerio';
 import puppeteer from 'puppeteer-extra';
@@ -248,6 +249,13 @@ function extractGenericCssCandidates($: CheerioAPI): PriceCandidate[] {
 
 // Browser-based scraping for sites that block HTTP requests (e.g., Cloudflare)
 async function scrapeWithBrowser(url: string): Promise<string> {
+  // Check if custom executablePath actually exists on system before using it
+  const envPath = process.env.PUPPETEER_EXECUTABLE_PATH;
+  let executablePath: string | undefined = undefined;
+  if (envPath && fs.existsSync(envPath)) {
+    executablePath = envPath;
+  }
+
   const browser = await puppeteer.launch({
     headless: true,
     args: [
@@ -260,9 +268,10 @@ async function scrapeWithBrowser(url: string): Promise<string> {
       '--window-size=1920,1080',
       '--start-maximized',
     ],
-    executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined,
+    executablePath,
     ignoreDefaultArgs: ['--enable-automation'],
   });
+
 
   try {
     const page = await browser.newPage();

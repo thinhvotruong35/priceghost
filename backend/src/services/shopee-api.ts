@@ -39,11 +39,12 @@ export function extractShopeeIds(url: string): { shopId: string; itemId: string 
     return { shopId: dotPattern[1], itemId: dotPattern[2] };
   }
 
-  // Pattern 2: /shop/SHOPID/product/ITEMID
-  const shopPattern = url.match(/\/shop\/(\d+)\/product\/(\d+)/);
+  // Pattern 2: /shop/SHOPID/product/ITEMID or /product/SHOPID/ITEMID
+  const shopPattern = url.match(/\/(?:shop\/\d+\/product|product)\/(\d+)\/(\d+)/);
   if (shopPattern) {
     return { shopId: shopPattern[1], itemId: shopPattern[2] };
   }
+
 
   // Pattern 3: ?itemid=ITEMID&shopid=SHOPID (query params)
   const urlObj = new URL(url);
