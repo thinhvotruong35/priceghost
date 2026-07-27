@@ -10,6 +10,7 @@ const currencyMap: Record<string, string> = {
   '£': 'GBP',
   '¥': 'JPY',
   '₹': 'INR',
+  '₫': 'VND',
   'Fr.': 'CHF',
   'CHF': 'CHF',
   'CAD': 'CAD',
@@ -17,19 +18,24 @@ const currencyMap: Record<string, string> = {
   'USD': 'USD',
   'EUR': 'EUR',
   'GBP': 'GBP',
+  'VND': 'VND',
+  'VNĐ': 'VND',
+  'đ': 'VND',
 };
+
 
 // Patterns to match prices in text
 const pricePatterns = [
-  // $29.99 or $29,99 or $ 29.99
-  /(?<currency>[$€£¥₹])\s*(?<price>[\d,]+\.?\d*)/,
+  // $29.99 or $29,99 or ₫1.299.000 or ₫ 1,299,000
+  /(?<currency>[$€£¥₹₫])\s*(?<price>[\d,.]+)/,
   // CHF 29.99 or Fr. 29.99 (Swiss franc prefix)
   /(?<currency>CHF|Fr\.)\s*(?<price>[\d,]+\.?\d*)/i,
-  // 29.99 USD or 29,99 EUR or 29.99 CHF
-  /(?<price>[\d,]+\.?\d*)\s*(?<currency>USD|EUR|GBP|CAD|AUD|JPY|INR|CHF)/i,
+  // 29.99 USD or 1.299.000 VND/VNĐ/đ
+  /(?<price>[\d,.]+)\s*(?<currency>USD|EUR|GBP|CAD|AUD|JPY|INR|CHF|VND|VNĐ|đ)/i,
   // Plain number with optional decimal (fallback)
   /(?<price>\d{1,3}(?:[,.\s]?\d{3})*(?:[.,]\d{2})?)/,
 ];
+
 
 export function parsePrice(text: string): ParsedPrice | null {
   if (!text) return null;
@@ -37,7 +43,7 @@ export function parsePrice(text: string): ParsedPrice | null {
   // Clean up the text
   const cleanText = text.trim().replace(/\s+/g, ' ');
 
-  // Reject monthly payment/financing prices (e.g., "$25/mo", "per month", "4 payments", etc.)
+  // Reject monthly payment/financing prices
   const lowerText = cleanText.toLowerCase();
   if (lowerText.includes('/mo') ||
       lowerText.includes('per month') ||
@@ -51,16 +57,21 @@ export function parsePrice(text: string): ParsedPrice | null {
     return null;
   }
 
+  // Detect if this is a VND price (₫, đ, VND, VNĐ)
+  const isVND = /[₫đ]|VND|VNĐ/i.test(cleanText);
+
   for (const pattern of pricePatterns) {
     const match = cleanText.match(pattern);
     if (match && match.groups) {
       const priceStr = match.groups.price || match[1];
-      const currencySymbol = match.groups.currency || '$';
+      const currencySymbol = match.groups.currency || (isVND ? '₫' : '$');
 
       if (priceStr) {
-        const price = normalizePrice(priceStr);
+        const currency = currencyMap[currencySymbol] || (isVND ? 'VND' : 'USD');
+        const price = currency === 'VND'
+          ? normalizeVndPrice(priceStr)
+          : normalizePrice(priceStr);
         if (price !== null && price > 0) {
-          const currency = currencyMap[currencySymbol] || 'USD';
           return { price, currency };
         }
       }
@@ -68,15 +79,31 @@ export function parsePrice(text: string): ParsedPrice | null {
   }
 
   // Try to extract just a number as fallback
-  const numberMatch = cleanText.match(/[\d,]+\.?\d*/);
+  const numberMatch = cleanText.match(/[\d,.]+/);
   if (numberMatch) {
-    const price = normalizePrice(numberMatch[0]);
+    const price = isVND
+      ? normalizeVndPrice(numberMatch[0])
+      : normalizePrice(numberMatch[0]);
     if (price !== null && price > 0) {
-      return { price, currency: 'USD' };
+      return { price, currency: isVND ? 'VND' : 'USD' };
     }
   }
 
   return null;
+}
+
+
+/**
+ * Normalize VND price string.
+ * VND uses period as thousands separator: "1.299.000" = 1299000
+ * May also use comma as thousands separator: "1,299,000" = 1299000
+ */
+function normalizeVndPrice(priceStr: string): number | null {
+  if (!priceStr) return null;
+  // Remove all periods and commas (both used as thousands separators in VND)
+  const normalized = priceStr.replace(/[.,]/g, '');
+  const price = parseFloat(normalized);
+  return isNaN(price) ? null : price;
 }
 
 function normalizePrice(priceStr: string): number | null {
@@ -100,6 +127,7 @@ function normalizePrice(priceStr: string): number | null {
   const price = parseFloat(normalized);
   return isNaN(price) ? null : Math.round(price * 100) / 100;
 }
+
 
 export function extractPricesFromText(html: string): ParsedPrice[] {
   const prices: ParsedPrice[] = [];

@@ -115,7 +115,7 @@ const EXTRACTION_PROMPT = `You are a price extraction assistant. Analyze the fol
 Return a JSON object with these fields:
 - name: The product name/title (string or null)
 - price: The current selling price as a number (not the original/crossed-out price)
-- currency: The currency code (USD, EUR, GBP, etc.)
+- currency: The currency code (USD, EUR, GBP, VND, etc.)
 - imageUrl: The main product image URL (string or null)
 - stockStatus: One of "in_stock", "out_of_stock", or "unknown"
 - confidence: Your confidence in the extraction from 0 to 1
@@ -124,6 +124,19 @@ Important:
 - Extract the CURRENT/SALE price, not the original price if there's a discount
 - If you can't find a price with confidence, set price to null
 - Only return valid JSON, no explanation text
+
+Vietnamese e-commerce (Shopee, Lazada, TikTok Shop) special rules:
+- Currency is VND (Vietnamese Dong), symbols: ₫, đ, VNĐ, VND
+- PRIORITY ORDER for price selection (highest priority first):
+  1. "Giá sau voucher" / "Giá áp mã" (price after voucher — most favorable to buyer)
+  2. "Shopee trợ giá" / "Shopee Video" / "Giá App" (platform-subsidized price)
+  3. "Flash Deal" / "Giá sốc" / "Giá Flash Sale" (flash sale price — real, time-limited)
+  4. Current regular sale/promotion price
+  5. Original listed price (least preferred)
+- VND prices use period as thousands separator: "1.299.000" = 1,299,000 VND
+- "Chỉ còn X cái" (only X left) indicates in_stock
+- "Hết hàng" means out_of_stock
+- "Thêm vào giỏ hàng" / "Mua ngay" button = in_stock
 
 HTML Content:
 `;

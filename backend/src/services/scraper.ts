@@ -1083,6 +1083,417 @@ const siteScrapers: SiteScraper[] = [
     },
   },
 
+  // ==========================================
+  // SHOPEE VIETNAM
+  // ==========================================
+  {
+    match: (url) => /shopee\.vn/i.test(url),
+    scrape: ($, url) => {
+      let price: ParsedPrice | null = null;
+      let name: string | null = null;
+      let imageUrl: string | null = null;
+      let stockStatus: StockStatus = 'unknown';
+
+      // Strategy 1: Parse __NEXT_DATA__ (most reliable, embedded JSON)
+      try {
+        const nextDataRaw = $('#__NEXT_DATA__').html();
+        if (nextDataRaw) {
+          const nextData = JSON.parse(nextDataRaw);
+          // Shopee stores item info in multiple possible paths
+          const item =
+            nextData?.props?.pageProps?.data?.itemInfo?.item ||
+            nextData?.props?.pageProps?.initialData?.data?.itemInfo?.item ||
+            nextData?.props?.initialState?.product?.data?.item;
+
+          if (item) {
+            // Shopee stores prices in cents (divide by 100000 for VND)
+            const rawPrice = item.price_min ?? item.price;
+            if (rawPrice != null && rawPrice > 0) {
+              price = { price: Math.round(rawPrice / 100000), currency: 'VND' };
+            }
+            name = item.name ?? null;
+            if (item.image) {
+              imageUrl = `https://down-vn.img.susercontent.com/file/${item.image}`;
+            }
+            const itemStock = item.stock ?? item.item_status;
+            if (typeof itemStock === 'number') {
+              stockStatus = itemStock > 0 ? 'in_stock' : 'out_of_stock';
+            } else if (typeof itemStock === 'string') {
+              stockStatus = itemStock === 'normal' ? 'in_stock' : 'out_of_stock';
+            }
+            console.log(`[Shopee] __NEXT_DATA__ price: ${price?.price} VND, stock: ${stockStatus}`);
+          }
+        }
+      } catch (_e) {
+        console.log('[Shopee] __NEXT_DATA__ parse failed, trying CSS fallback');
+      }
+
+      // Strategy 2: Try to extract item/shop ID from URL and use Shopee API format
+      // URL patterns: shopee.vn/product-name-i.SHOPID.ITEMID or shopee.vn/shop/SHOPID/product/ITEMID
+      if (!price) {
+        const idMatch = url.match(/[.-]i\.(\d+)\.(\d+)/) ||
+                        url.match(/\/product\/(\d+)\/(\d+)/);
+        if (idMatch) {
+          console.log(`[Shopee] Found item ID: shopId=${idMatch[1]}, itemId=${idMatch[2]} — will use API in browser mode`);
+        }
+      }
+
+      // Strategy 3: CSS Selectors fallback
+      if (!price) {
+        const priceSelectors = [
+          // Current sale price selectors (Shopee changes class names frequently)
+          '[class*="product-price"] [class*="current"]',
+          '[class*="pdp-price"] [class*="current"]',
+          '[class*="productPrice"]',
+          '.J5Gt1j',   // Sale price container class (may change)
+          '._3n5NQx',  // Price text
+          '[data-sqe="price"]',
+          'meta[property="og:price:amount"]',
+        ];
+
+        for (const selector of priceSelectors) {
+          const el = $(selector).first();
+          if (!el.length) continue;
+          const priceText = el.attr('content') || el.text().trim();
+          if (!priceText) continue;
+          // Shopee prices are in VND, e.g. "1.299.000"
+          const cleanText = priceText.replace(/[.]/g, '').replace(/,/g, '.');
+          const numericMatch = cleanText.match(/(\d+(?:\.\d+)?)/);
+          if (numericMatch) {
+            const parsed = parseFloat(numericMatch[1]);
+            if (!isNaN(parsed) && parsed >= 1000) {
+              price = { price: parsed, currency: 'VND' };
+              console.log(`[Shopee] CSS fallback price: ${parsed} VND from "${selector}"`);
+              break;
+            }
+          }
+        }
+      }
+
+      // Name fallback
+      if (!name) {
+        name = $('[class*="product-name"]').first().text().trim() ||
+               $('h1[class*="title"]').first().text().trim() ||
+               $('meta[property="og:title"]').attr('content') ||
+               null;
+      }
+
+      // Image fallback
+      if (!imageUrl) {
+        imageUrl = $('meta[property="og:image"]').attr('content') || null;
+      }
+
+      // Stock status fallback — check for out-of-stock indicators
+      if (stockStatus === 'unknown') {
+        const bodyText = $('body').text().toLowerCase();
+        if (bodyText.includes('hết hàng') || bodyText.includes('sold out') || bodyText.includes('out of stock')) {
+          stockStatus = 'out_of_stock';
+        } else if ($('[class*="btn-add-to-cart"]').length > 0 || $('[class*="add-to-cart"]').length > 0) {
+          stockStatus = 'in_stock';
+        }
+      }
+
+      return { name, price, imageUrl, stockStatus };
+    },
+  },
+
+  // ==========================================
+  // LAZADA VIETNAM
+  // ==========================================
+  {
+    match: (url) => /lazada\.vn/i.test(url),
+    scrape: ($) => {
+      let price: ParsedPrice | null = null;
+      let name: string | null = null;
+      let imageUrl: string | null = null;
+      let stockStatus: StockStatus = 'unknown';
+
+      // Strategy 1: Parse window.__INITIAL_DATA__ embedded in <script> tags
+      try {
+        const scripts = $('script').toArray();
+        for (const script of scripts) {
+          const content = $(script).html() || '';
+          if (!content.includes('__INITIAL_DATA__') && !content.includes('window.pageData')) continue;
+
+          // Try __INITIAL_DATA__
+          const initMatch = content.match(/window\.__INITIAL_DATA__\s*=\s*(\{[\s\S]+?\});?\s*(?:window|<\/script|$)/);
+          if (initMatch) {
+            try {
+              const data = JSON.parse(initMatch[1]);
+              // Navigate Lazada data tree
+              const fields = data?.data?.root?.fields ||
+                             data?.pageData?.data?.root?.fields ||
+                             data?.mods;
+
+              // Price may be in different locations
+              const priceInfo =
+                fields?.seller?.sellerProducts?.[0]?.price ||
+                fields?.product?.basic?.primaryImage ||
+                data?.data?.product?.price;
+
+              // Try direct price paths
+              const salePrice =
+                fields?.price?.salePrice ||
+                data?.data?.product?.price?.salePrice ||
+                data?.pageData?.product?.price?.salePrice;
+
+              const originalPrice =
+                fields?.price?.originalPrice ||
+                data?.data?.product?.price?.originalPrice;
+
+              // Prefer sale price, then original
+              const rawPrice = salePrice || originalPrice || priceInfo?.salePrice || priceInfo?.originalPrice;
+              if (rawPrice != null) {
+                const numPrice = typeof rawPrice === 'string'
+                  ? parseFloat(rawPrice.replace(/[^0-9.]/g, ''))
+                  : rawPrice;
+                if (!isNaN(numPrice) && numPrice >= 1000) {
+                  price = { price: numPrice, currency: 'VND' };
+                  console.log(`[Lazada] __INITIAL_DATA__ price: ${numPrice} VND`);
+                }
+              }
+
+              // Stock
+              const availability = fields?.availability?.stock ?? data?.data?.product?.availability?.stock;
+              if (availability != null) {
+                stockStatus = availability > 0 ? 'in_stock' : 'out_of_stock';
+              }
+
+              // Name
+              const rawName = fields?.product?.basic?.title ||
+                              data?.data?.product?.name ||
+                              data?.pageData?.product?.title;
+              if (rawName) name = rawName;
+
+              // Image
+              const rawImage = fields?.product?.basic?.primaryImage ||
+                               data?.data?.product?.image?.primaryImage ||
+                               data?.pageData?.product?.images?.[0];
+              if (rawImage) imageUrl = rawImage;
+            } catch (_innerE) {
+              // JSON parse failed for this script
+            }
+          }
+
+          if (price) break;
+        }
+      } catch (_e) {
+        console.log('[Lazada] __INITIAL_DATA__ parse failed');
+      }
+
+      // Strategy 2: JSON-LD structured data (sometimes present)
+      if (!price) {
+        try {
+          $('script[type="application/ld+json"]').each((_, el) => {
+            if (price) return;
+            const raw = $(el).html();
+            if (!raw) return;
+            const data = JSON.parse(raw);
+            const products = Array.isArray(data) ? data : [data];
+            for (const item of products) {
+              if (item['@type'] === 'Product' && item.offers) {
+                const offer = Array.isArray(item.offers) ? item.offers[0] : item.offers;
+                const rawP = offer?.price || offer?.lowPrice;
+                if (rawP) {
+                  price = { price: parseFloat(String(rawP)), currency: offer?.priceCurrency || 'VND' };
+                  break;
+                }
+              }
+            }
+          });
+        } catch (_e) {}
+      }
+
+      // Strategy 3: CSS Selectors fallback
+      if (!price) {
+        const priceSelectors = [
+          '[class*="pdp-price_type_normal"]',
+          '[class*="pdp-price_type_deleted"]',   // crossed-out — skip
+          '.pdp-price',
+          '[data-spm-anchor-id*="price"]',
+          'span[class*="Price"]',
+          'meta[property="og:price:amount"]',
+        ];
+        for (const selector of priceSelectors) {
+          if (selector.includes('deleted')) continue; // skip crossed-out prices
+          const el = $(selector).first();
+          if (!el.length) continue;
+          const raw = el.attr('content') || el.text().trim();
+          // Clean VND format: "1.299.000" or "1,299,000"
+          const cleanNum = raw.replace(/\./g, '').replace(/,/g, '');
+          const num = parseFloat(cleanNum);
+          if (!isNaN(num) && num >= 1000) {
+            price = { price: num, currency: 'VND' };
+            break;
+          }
+        }
+      }
+
+      // Name fallback
+      if (!name) {
+        name = $('h1[class*="pdp"]').first().text().trim() ||
+               $('h1[class*="title"]').first().text().trim() ||
+               $('meta[property="og:title"]').attr('content') ||
+               null;
+      }
+
+      // Image fallback
+      if (!imageUrl) {
+        imageUrl = $('meta[property="og:image"]').attr('content') ||
+                   $('[class*="gallery"] img').first().attr('src') ||
+                   null;
+      }
+
+      // Stock fallback
+      if (stockStatus === 'unknown') {
+        const bodyText = $('body').text().toLowerCase();
+        if (bodyText.includes('hết hàng') || bodyText.includes('out of stock') || bodyText.includes('sold out')) {
+          stockStatus = 'out_of_stock';
+        } else if ($('[class*="add-to-cart"]').length > 0 || $('[class*="btn-cart"]').length > 0) {
+          stockStatus = 'in_stock';
+        }
+      }
+
+      return { name, price, imageUrl, stockStatus };
+    },
+  },
+
+  // ==========================================
+  // TIKTOK SHOP VIETNAM
+  // ==========================================
+  {
+    match: (url) => /tiktok\.com\/.*(?:shop|product)|shop\.tiktok\.com/i.test(url),
+    scrape: ($) => {
+      let price: ParsedPrice | null = null;
+      let name: string | null = null;
+      let imageUrl: string | null = null;
+      let stockStatus: StockStatus = 'unknown';
+
+      // Strategy 1: TikTok embeds data in __UNIVERSAL_DATA_FOR_REHYDRATION__
+      try {
+        const rehydrationRaw = $('#__UNIVERSAL_DATA_FOR_REHYDRATION__').html();
+        if (rehydrationRaw) {
+          const rehydration = JSON.parse(rehydrationRaw);
+          const scope = rehydration?.['__DEFAULT_SCOPE__'];
+
+          // TikTok Shop product detail
+          const productInfo =
+            scope?.['webapp.product-detail']?.productInfo ||
+            scope?.['webapp.shop-product-detail']?.productInfo;
+
+          if (productInfo) {
+            // Price in TikTok format
+            const priceData = productInfo?.priceInfo ||
+                              productInfo?.price ||
+                              productInfo?.product?.price;
+
+            // TikTok prices are usually in smallest currency unit (đồng)
+            const rawCurrent = priceData?.currentPrice ?? priceData?.displayPrice ?? priceData?.price;
+            if (rawCurrent != null) {
+              const numPrice = typeof rawCurrent === 'string'
+                ? parseFloat(rawCurrent.replace(/[^0-9.]/g, ''))
+                : rawCurrent;
+              if (!isNaN(numPrice) && numPrice > 0) {
+                // TikTok sometimes stores in cents/smallest unit
+                const finalPrice = numPrice < 1000 ? numPrice * 1000 : numPrice;
+                price = { price: finalPrice, currency: 'VND' };
+                console.log(`[TikTok Shop] Rehydration price: ${finalPrice} VND`);
+              }
+            }
+
+            name = productInfo?.title ||
+                   productInfo?.product?.title ||
+                   productInfo?.productName ||
+                   null;
+
+            const rawImage = productInfo?.coverUrl ||
+                             productInfo?.product?.image ||
+                             productInfo?.images?.[0]?.url;
+            if (rawImage) imageUrl = rawImage;
+
+            const stockData = productInfo?.stock ?? productInfo?.product?.stock;
+            if (stockData != null) {
+              stockStatus = stockData > 0 ? 'in_stock' : 'out_of_stock';
+            }
+          }
+        }
+      } catch (_e) {
+        console.log('[TikTok Shop] Rehydration parse failed');
+      }
+
+      // Strategy 2: Parse NEXT_DATA or SSR_DATA scripts
+      if (!price) {
+        try {
+          $('script[id="SIGI_STATE"], script[id="SSR_DATA"]').each((_, el) => {
+            if (price) return;
+            const raw = $(el).html();
+            if (!raw) return;
+            const data = JSON.parse(raw);
+            // Navigate different TikTok data structures
+            const product = data?.ItemModule?.[Object.keys(data?.ItemModule || {})[0]] ||
+                            data?.product;
+            if (product?.price) {
+              const rawP = product.price.current || product.price;
+              const num = parseFloat(String(rawP));
+              if (!isNaN(num) && num > 0) {
+                price = { price: num < 1000 ? num * 1000 : num, currency: 'VND' };
+              }
+            }
+          });
+        } catch (_e) {}
+      }
+
+      // Strategy 3: CSS fallback
+      if (!price) {
+        const priceSelectors = [
+          '[data-e2e="product-price"]',
+          '[class*="product-price"]',
+          '[class*="ProductPrice"]',
+          '[class*="pdp-price"]',
+          'meta[property="og:price:amount"]',
+        ];
+        for (const selector of priceSelectors) {
+          const el = $(selector).first();
+          if (!el.length) continue;
+          const raw = el.attr('content') || el.text().trim();
+          const cleanNum = raw.replace(/[^0-9]/g, '');
+          const num = parseFloat(cleanNum);
+          if (!isNaN(num) && num >= 1000) {
+            price = { price: num, currency: 'VND' };
+            break;
+          }
+        }
+      }
+
+      // Name fallback
+      if (!name) {
+        name = $('[data-e2e="product-title"]').first().text().trim() ||
+               $('h1[class*="title"]').first().text().trim() ||
+               $('meta[property="og:title"]').attr('content') ||
+               null;
+      }
+
+      // Image fallback
+      if (!imageUrl) {
+        imageUrl = $('meta[property="og:image"]').attr('content') ||
+                   $('[data-e2e="product-image"] img').first().attr('src') ||
+                   null;
+      }
+
+      // Stock fallback
+      if (stockStatus === 'unknown') {
+        const bodyText = $('body').text().toLowerCase();
+        if (bodyText.includes('hết hàng') || bodyText.includes('out of stock') || bodyText.includes('sold out')) {
+          stockStatus = 'out_of_stock';
+        } else if ($('[data-e2e="add-to-cart"]').length > 0) {
+          stockStatus = 'in_stock';
+        }
+      }
+
+      return { name, price, imageUrl, stockStatus };
+    },
+  },
+
 ];
 
 // Generic selectors as fallback
@@ -1386,6 +1797,9 @@ export async function scrapeProductWithVoting(
     /target\.com/i,
     /walmart\.com/i,
     /costco\.com/i,
+    /shopee\.vn/i,    // VN — SPA, requires JS rendering
+    /lazada\.vn/i,    // VN — SPA, requires JS rendering
+    /tiktok\.com/i,   // VN + Global — heavy JS
   ];
   const requiresBrowser = jsHeavySites.some(pattern => pattern.test(url));
 
