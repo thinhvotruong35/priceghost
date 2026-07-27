@@ -1,16 +1,14 @@
 import fs from 'fs';
 import axios, { AxiosError } from 'axios';
 import { load, type CheerioAPI } from 'cheerio';
-import puppeteer from 'puppeteer-extra';
-import StealthPlugin from 'puppeteer-extra-plugin-stealth';
+import puppeteer from 'puppeteer';
+import { extractShopeeIds, fetchShopeeItemData } from './shopee-api';
 import {
   parsePrice,
   ParsedPrice,
   findMostLikelyPrice,
 } from '../utils/priceParser';
 
-// Add stealth plugin to avoid bot detection (Cloudflare, etc.)
-puppeteer.use(StealthPlugin());
 
 export type StockStatus = 'in_stock' | 'out_of_stock' | 'unknown';
 
@@ -1845,6 +1843,35 @@ export async function scrapeProductWithVoting(
 
   let html: string = '';
 
+  // Direct API fetch for Shopee Vietnam (fastest, no Puppeteer needed)
+  if (/shopee\.vn/i.test(url)) {
+    const ids = extractShopeeIds(url);
+    if (ids) {
+      console.log(`[Voting] Shopee API direct fetch for shopId=${ids.shopId}, itemId=${ids.itemId}`);
+      const shopeeData = await fetchShopeeItemData(ids.shopId, ids.itemId);
+      if (shopeeData && shopeeData.price) {
+        console.log(`[Voting] Shopee API succeeded: ${shopeeData.price} ${shopeeData.currency}`);
+        const candidate: PriceCandidate = {
+          price: shopeeData.price,
+          currency: shopeeData.currency,
+          method: 'site-specific',
+          confidence: 0.95,
+        };
+        return {
+          name: shopeeData.name,
+          price: { price: shopeeData.price, currency: shopeeData.currency },
+          imageUrl: shopeeData.imageUrl,
+          url,
+          stockStatus: shopeeData.stockStatus,
+          aiStatus: null,
+          priceCandidates: [candidate],
+          needsReview: false,
+        };
+      }
+      console.log(`[Voting] Shopee API direct fetch failed, falling back to browser/HTML...`);
+    }
+  }
+
   // Sites known to require JavaScript rendering
   const jsHeavySites = [
     /bestbuy\.com/i,
@@ -1856,6 +1883,7 @@ export async function scrapeProductWithVoting(
     /tiktok\.com/i,   // VN + Global — heavy JS
   ];
   const requiresBrowser = jsHeavySites.some(pattern => pattern.test(url));
+
 
   try {
     let usedBrowser = false;
