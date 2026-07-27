@@ -1549,38 +1549,66 @@ export async function scrapeProduct(url: string, userId?: number): Promise<Scrap
   try {
     let usedBrowser = false;
 
-    try {
-      const response = await axios.get<string>(url, {
-        headers: {
-          'User-Agent':
-            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
-          Accept:
-            'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
-          'Accept-Language': 'en-US,en;q=0.9',
-          'Accept-Encoding': 'gzip, deflate, br',
-          'Cache-Control': 'no-cache',
-          Pragma: 'no-cache',
-          'Sec-Ch-Ua': '"Not A(Brand";v="99", "Google Chrome";v="121", "Chromium";v="121"',
-          'Sec-Ch-Ua-Mobile': '?0',
-          'Sec-Ch-Ua-Platform': '"Windows"',
-          'Sec-Fetch-Dest': 'document',
-          'Sec-Fetch-Mode': 'navigate',
-          'Sec-Fetch-Site': 'none',
-          'Sec-Fetch-User': '?1',
-          'Upgrade-Insecure-Requests': '1',
-        },
-        timeout: 20000,
-        maxRedirects: 5,
-      });
-      html = response.data;
-    } catch (axiosError) {
-      // If we get a 403 (Forbidden), try using a headless browser
-      if (axiosError instanceof AxiosError && axiosError.response?.status === 403) {
-        console.log(`HTTP request blocked (403) for ${url}, falling back to browser scraping...`);
+    // Sites that REQUIRE JavaScript rendering — skip axios entirely and use browser directly
+    const jsHeavySites = [
+      /shopee\.vn/i,
+      /lazada\.vn/i,
+      /tiktok\.com/i,
+      /bestbuy\.com/i,
+      /target\.com/i,
+      /walmart\.com/i,
+      /costco\.com/i,
+    ];
+    const requiresBrowser = jsHeavySites.some(pattern => pattern.test(url));
+
+    if (requiresBrowser) {
+      console.log(`[Scraper] ${url} requires browser rendering — using Puppeteer directly`);
+      try {
         html = await scrapeWithBrowser(url);
         usedBrowser = true;
-      } else {
-        throw axiosError;
+      } catch (browserError) {
+        console.error(`[Scraper] Puppeteer failed for ${url}:`, browserError);
+        // Try axios as last resort
+        const response = await axios.get<string>(url, {
+          headers: { 'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/20A362' },
+          timeout: 20000,
+        });
+        html = response.data;
+      }
+    } else {
+      try {
+        const response = await axios.get<string>(url, {
+          headers: {
+            'User-Agent':
+              'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
+            Accept:
+              'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.9',
+            'Accept-Encoding': 'gzip, deflate, br',
+            'Cache-Control': 'no-cache',
+            Pragma: 'no-cache',
+            'Sec-Ch-Ua': '"Not A(Brand";v="99", "Google Chrome";v="121", "Chromium";v="121"',
+            'Sec-Ch-Ua-Mobile': '?0',
+            'Sec-Ch-Ua-Platform': '"Windows"',
+            'Sec-Fetch-Dest': 'document',
+            'Sec-Fetch-Mode': 'navigate',
+            'Sec-Fetch-Site': 'none',
+            'Sec-Fetch-User': '?1',
+            'Upgrade-Insecure-Requests': '1',
+          },
+          timeout: 20000,
+          maxRedirects: 5,
+        });
+        html = response.data;
+      } catch (axiosError) {
+        // If blocked (403/429) or any network error, try browser fallback
+        console.log(`HTTP request failed for ${url}, falling back to browser scraping...`);
+        try {
+          html = await scrapeWithBrowser(url);
+          usedBrowser = true;
+        } catch (_browserError) {
+          throw axiosError; // rethrow original error if browser also fails
+        }
       }
     }
 
@@ -1598,6 +1626,23 @@ export async function scrapeProduct(url: string, userId?: number): Promise<Scrap
       if (siteResult.price) result.price = siteResult.price;
       if (siteResult.imageUrl) result.imageUrl = siteResult.imageUrl;
       if (siteResult.stockStatus) result.stockStatus = siteResult.stockStatus;
+
+      // If site-specific scraper ran but found no price AND we haven't tried browser yet,
+      // retry with browser (handles JS-rendered sites where axios got a redirect/login page)
+      if (!result.price && !usedBrowser) {
+        console.log(`[Scraper] Site-specific scraper found no price for ${url}, retrying with browser...`);
+        try {
+          html = await scrapeWithBrowser(url);
+          const $browser = load(html);
+          const siteResultBrowser = siteScraper.scrape($browser, url);
+          if (siteResultBrowser.name) result.name = siteResultBrowser.name;
+          if (siteResultBrowser.price) result.price = siteResultBrowser.price;
+          if (siteResultBrowser.imageUrl) result.imageUrl = siteResultBrowser.imageUrl;
+          if (siteResultBrowser.stockStatus) result.stockStatus = siteResultBrowser.stockStatus;
+        } catch (_retryError) {
+          console.log(`[Scraper] Browser retry also failed for ${url}`);
+        }
+      }
     }
 
     // Try JSON-LD structured data
