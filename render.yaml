@@ -12,7 +12,7 @@ services:
     region: singapore          # Closest region to Vietnam
     plan: free
     rootDir: backend
-    buildCommand: npm install && npm run build
+    buildCommand: npm install --include=dev && npm run build
     startCommand: node dist/index.js
     healthCheckPath: /api/auth/registration-status
     envVars:
@@ -41,7 +41,7 @@ services:
     region: singapore
     plan: free
     rootDir: frontend
-    buildCommand: npm install && npm run build
+    buildCommand: npm install --include=dev && npm run build
     staticPublishPath: ./dist
     envVars:
       - key: VITE_API_URL
