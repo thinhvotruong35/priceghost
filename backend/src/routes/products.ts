@@ -82,6 +82,18 @@ router.post('/', async (req: AuthRequest, res: Response) => {
       return;
     }
 
+    // Validate Shopee URL to ensure both shopId and itemId are present
+    if (/shopee\.vn/i.test(url)) {
+      const { extractShopeeIds } = await import('../services/shopee-api');
+      if (!extractShopeeIds(url)) {
+        res.status(400).json({
+          error:
+            'Shopee URL thiếu shopId hoặc itemId. Hãy mở trang sản phẩm trên Shopee, bấm Chia sẻ > Sao chép liên kết, rồi dán link đầy đủ.',
+        });
+        return;
+      }
+    }
+
     // Use multi-strategy voting scraper
     const scrapedData = await scrapeProductWithVoting(url, userId);
 

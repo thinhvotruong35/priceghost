@@ -32,29 +32,45 @@ export interface ShopeeItemData {
  * - https://shopee.vn/shop/SHOPID/product/ITEMID
  * - https://shopee.vn/-i.SHOPID.ITEMID
  */
-export function extractShopeeIds(url: string): { shopId: string; itemId: string } | null {
-  // Pattern 1: i.SHOPID.ITEMID (most common)
-  const dotPattern = url.match(/[.-]i\.(\d+)\.(\d+)/);
-  if (dotPattern) {
-    return { shopId: dotPattern[1], itemId: dotPattern[2] };
+export function extractShopeeIds(
+  url: string
+): { shopId: string; itemId: string } | null {
+  try {
+    const parsedUrl = new URL(url);
+
+    // URL chuẩn: ten-san-pham-i.SHOPID.ITEMID hoặc -i.SHOPID.ITEMID
+    const dotPattern = parsedUrl.pathname.match(/(?:^|[.-])i\.(\d+)\.(\d+)/);
+    if (dotPattern) {
+      return { shopId: dotPattern[1], itemId: dotPattern[2] };
+    }
+
+    // /shop/SHOPID/product/ITEMID
+    const shopProductPattern = parsedUrl.pathname.match(
+      /\/shop\/(\d+)\/product\/(\d+)\/?$/i
+    );
+    if (shopProductPattern) {
+      return { shopId: shopProductPattern[1], itemId: shopProductPattern[2] };
+    }
+
+    // /product/SHOPID/ITEMID
+    const productPattern = parsedUrl.pathname.match(
+      /\/product\/(\d+)\/(\d+)\/?$/i
+    );
+    if (productPattern) {
+      return { shopId: productPattern[1], itemId: productPattern[2] };
+    }
+
+    // Query parameters: ?shopid=...&itemid=...
+    const shopId = parsedUrl.searchParams.get('shopid');
+    const itemId = parsedUrl.searchParams.get('itemid');
+    if (shopId && itemId) {
+      return { shopId, itemId };
+    }
+
+    return null;
+  } catch {
+    return null;
   }
-
-  // Pattern 2: /shop/SHOPID/product/ITEMID or /product/SHOPID/ITEMID
-  const shopPattern = url.match(/\/(?:shop\/\d+\/product|product)\/(\d+)\/(\d+)/);
-  if (shopPattern) {
-    return { shopId: shopPattern[1], itemId: shopPattern[2] };
-  }
-
-
-  // Pattern 3: ?itemid=ITEMID&shopid=SHOPID (query params)
-  const urlObj = new URL(url);
-  const itemId = urlObj.searchParams.get('itemid');
-  const shopId = urlObj.searchParams.get('shopid');
-  if (itemId && shopId) {
-    return { shopId, itemId };
-  }
-
-  return null;
 }
 
 /**
